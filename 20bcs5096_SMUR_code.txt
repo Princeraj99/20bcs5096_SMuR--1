@@ -1,0 +1,16 @@
+set.seed(123)  # Setting seed for reproducibility
+x <- rnorm(100, mean = 5, sd = 2)
+y <- 2 * x + rnorm(100, mean = 0, sd = 2)
+
+data <- data.frame(x, y)
+
+model <- lm(y ~ x, data = data)
+
+summary(model)
+
+plot(x, y, main = "Simple Linear Regression", xlab = "X", ylab = "Y")
+abline(model, col = "red")
+
+new_data <- data.frame(x = c(3, 6, 9))  # Example new data
+predictions <- predict(model, newdata = new_data)
+cat("Predictions for new data:", predictions, "\n")
