@@ -1,16 +1,62 @@
-set.seed(123)  # Setting seed for reproducibility
-x <- rnorm(100, mean = 5, sd = 2)
-y <- 2 * x + rnorm(100, mean = 0, sd = 2)
+library(tidyverse)
+library(caret)
+library(glmnet)
 
-data <- data.frame(x, y)
+data <- read.csv("your_data.csv")
+data <- data.frame(scale(data)) # Standardize data
 
-model <- lm(y ~ x, data = data)
+dependent_variable <- "y"
 
-summary(model)
+potential_predictors <- names(data)[2:ncol(data)]
 
-plot(x, y, main = "Simple Linear Regression", xlab = "X", ylab = "Y")
-abline(model, col = "red")
+set.seed(123)
+training_index <- sample(1:nrow(data), size = nrow(data) * 0.8)
+training_data <- data[training_index, ]
+testing_data <- data[-training_index, ]
 
-new_data <- data.frame(x = c(3, 6, 9))  # Example new data
-predictions <- predict(model, newdata = new_data)
-cat("Predictions for new data:", predictions, "\n")
+nested_cv <- function(data, dependent_variable, predictors, lambda_range) {
+  # Inner loop: tune lambda with 5-fold cross-validation
+  inner_cv_control <- trainControl(method = "cv", number = 5)
+  inner_fit <- train(
+    formula = paste0(dependent_variable, " ~ ", paste(predictors, collapse = " + ")),
+    data = data,
+    trControl = inner_cv_control,
+    method = "glmnet",
+    lambda = lambda_range
+  )
+  
+  best_lambda <- inner_fit$bestTuneParam$lambda
+  outer_fit <- glmnet(
+    x = training_data[, predictors], 
+    y = training_data[, dependent_variable],
+    lambda = best_lambda
+  )
+  
+  return(list(
+    model = outer_fit,
+    predictions = predict(outer_fit, newdata = testing_data[, predictors])
+  ))
+}
+
+lambda_range <- seq(from = 0.01, to = 10, by = 0.01)
+
+cv_results <- nested_cv(training_data, dependent_variable, potential_predictors, lambda_range)
+
+best_model <- cv_results$model
+predictions <- cv_results$predictions
+
+truth <- testing_data[, dependent_variable]
+rmse <- sqrt(mean((truth - predictions)^2))
+r_squared <- cor(truth, predictions)^2
+
+cat("Best lambda:", best_model$lambda)
+cat("RMSE:", rmse)
+cat("R-squared:", r_squared)
+
+importance <- coef(best_model, s = TRUE)$x
+important_features <- names(importance)[abs(importance) > 0.1]
+
+cat("Important features:", paste(important_features, collapse = ", "))
+
+plot(importance, xlab = "Variable", ylab = "Importance")
+abline(h = 0, col = "gray", linetype = "dashed")
