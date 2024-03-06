@@ -1,62 +1,51 @@
-library(tidyverse)
-library(caret)
-library(glmnet)
+library(Rcpp); library(data.table); library(dplyr); library(lubridate);  
+library(tidyr); library(ggplot2); library(reshape2); library(caret);
 
-data <- read.csv("your_data.csv")
-data <- data.frame(scale(data)) # Standardize data
+src <- '
+#include "memcached_monitoring_library.h"
+DataFrame get_metrics(CharacterVector servers){
+  DataFrame out = memcached_monitoring_library::get_metrics(as<std::vector<std::string>>(servers));
+  return out;  
+}'
 
-dependent_variable <- "y"
+get_metrics <- cppFunction(src)
 
-potential_predictors <- names(data)[2:ncol(data)]
+servers <- c("server1", "server2", "server3")  
+data <- get_metrics(servers)
 
-set.seed(123)
-training_index <- sample(1:nrow(data), size = nrow(data) * 0.8)
-training_data <- data[training_index, ]
-testing_data <- data[-training_index, ]
+str(data) 
+summary(data)
+ggplot(data, aes(x = timestamp)) + geom_density()
 
-nested_cv <- function(data, dependent_variable, predictors, lambda_range) {
-  # Inner loop: tune lambda with 5-fold cross-validation
-  inner_cv_control <- trainControl(method = "cv", number = 5)
-  inner_fit <- train(
-    formula = paste0(dependent_variable, " ~ ", paste(predictors, collapse = " + ")),
-    data = data,
-    trControl = inner_cv_control,
-    method = "glmnet",
-    lambda = lambda_range
+data <- data %>%  
+  tidyr::drop_na() %>%
+  dplyr::filter(!is_outlier(.)) %>% 
+  dplyr::select(-ID) # Remove unnecessary vars
+
+data <- data %>%
+  mutate(
+    timestamp = lubridate::ymd_hms(timestamp),
+    access_freq = as.numeric(dplyr::count(timestamp)), 
+    data_size = rnorm(n(), mean = 500, sd = 50), # Simulate 
+    server_load = runif(n(), min = 0, max = 100) # Simulate
   )
+
+set.seed(1)
+kmeans_vars <- c("access_freq", "data_size", "server_load")
+
+clusters <- kmeans(select(data, kmeans_vars), 3)
+
+data$cluster <- clusters$cluster 
+
+analysis <- lapply(1:3, function(i){
   
-  best_lambda <- inner_fit$bestTuneParam$lambda
-  outer_fit <- glmnet(
-    x = training_data[, predictors], 
-    y = training_data[, dependent_variable],
-    lambda = best_lambda
-  )
+  cluster_data <- dplyr::filter(data, cluster == i)
   
-  return(list(
-    model = outer_fit,
-    predictions = predict(outer_fit, newdata = testing_data[, predictors])
-  ))
-}
+  print(paste0("Cluster ", i, " characteristics: \n"))
+  print(summary(cluster_data))
+  
+  ggplot(cluster_data, aes(x = access_freq)) + 
+    geom_density()
+})
 
-lambda_range <- seq(from = 0.01, to = 10, by = 0.01)
-
-cv_results <- nested_cv(training_data, dependent_variable, potential_predictors, lambda_range)
-
-best_model <- cv_results$model
-predictions <- cv_results$predictions
-
-truth <- testing_data[, dependent_variable]
-rmse <- sqrt(mean((truth - predictions)^2))
-r_squared <- cor(truth, predictions)^2
-
-cat("Best lambda:", best_model$lambda)
-cat("RMSE:", rmse)
-cat("R-squared:", r_squared)
-
-importance <- coef(best_model, s = TRUE)$x
-important_features <- names(importance)[abs(importance) > 0.1]
-
-cat("Important features:", paste(important_features, collapse = ", "))
-
-plot(importance, xlab = "Variable", ylab = "Importance")
-abline(h = 0, col = "gray", linetype = "dashed")
+write.csv(analysis, file = "cluster_analysis.csv")
